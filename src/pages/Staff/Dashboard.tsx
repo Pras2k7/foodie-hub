@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, Clock, CheckCircle, AlertCircle, Package, X, Dollar
 import Header from '../../components/Layout/Header';
 import Toast from '../../components/Common/Toast';
 import ThemeToggle from '../../components/Common/ThemeToggle';
+import { useRealtimeSubscription } from '../../hooks/useRealtimeSubscription';
 import { MenuItem, Order } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -25,6 +26,48 @@ const StaffDashboard: React.FC = () => {
   const [savingMenuItem, setSavingMenuItem] = useState(false);
   const [deletingMenuItem, setDeletingMenuItem] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Real-time subscriptions for menu items and orders
+  useRealtimeSubscription({
+    table: 'menu_items',
+    filter: `canteen_name=eq.${user?.full_name}`,
+    onUpdate: (payload) => {
+      console.log('Staff menu item updated:', payload);
+      // Update the specific menu item in state
+      setMenuItems(prev => prev.map(item => 
+        item.id === payload.new.id ? { ...item, ...payload.new } : item
+      ));
+    }
+  });
+
+  useRealtimeSubscription({
+    table: 'orders',
+    onUpdate: (payload) => {
+      console.log('Order updated:', payload);
+      fetchOrders(); // Refresh orders when status changes
+    },
+    onInsert: (payload) => {
+      console.log('New order received:', payload);
+      fetchOrders(); // Refresh orders when new order is placed
+      showToast('New order received!', 'success');
+    }
+  });
+
+  useRealtimeSubscription({
+    table: 'cart_items',
+    onUpdate: (payload) => {
+      console.log('Cart updated, refreshing menu quantities');
+      fetchMenuItems(); // Refresh menu items when cart changes affect quantities
+    },
+    onInsert: (payload) => {
+      console.log('Item added to cart, refreshing menu quantities');
+      fetchMenuItems(); // Refresh menu items when cart changes affect quantities
+    },
+    onDelete: (payload) => {
+      console.log('Item removed from cart, refreshing menu quantities');
+      fetchMenuItems(); // Refresh menu items when cart changes affect quantities
+    }
+  });
 
   const [editForm, setEditForm] = useState({
     name: '',
@@ -551,7 +594,17 @@ const StaffDashboard: React.FC = () => {
                     </div>
                     <p className="text-gray-600 dark:text-gray-400 mb-4">{item.description}</p>
                     <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-500 mb-2">
-                      <span>Available: {item.quantity_available}</span>
+                      <span className={`font-medium ${
+                        item.quantity_available <= 0 
+                          ? 'text-red-600 dark:text-red-400' 
+                          : item.quantity_available <= 5 
+                          ? 'text-yellow-600 dark:text-yellow-400' 
+                          : 'text-green-600 dark:text-green-400'
+                      }`}>
+                        Available: {item.quantity_available}
+                        {item.quantity_available <= 0 && ' (Out of Stock)'}
+                        {item.quantity_available > 0 && item.quantity_available <= 5 && ' (Low Stock)'}
+                      </span>
                       <span>Serves: {item.serves}</span>
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-400 mb-4">

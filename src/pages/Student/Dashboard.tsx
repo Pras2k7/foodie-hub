@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useRealtimeSubscription } from '../../hooks/useRealtimeSubscription';
 import { 
   ShoppingCart, 
   Plus, 
@@ -70,6 +71,35 @@ const StudentDashboard: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Real-time subscriptions for menu items and cart
+  useRealtimeSubscription({
+    table: 'menu_items',
+    onUpdate: (payload) => {
+      console.log('Menu item updated:', payload);
+      // Update the specific menu item in state
+      setMenuItems(prev => prev.map(item => 
+        item.id === payload.new.id ? { ...item, ...payload.new } : item
+      ));
+    }
+  });
+
+  useRealtimeSubscription({
+    table: 'cart_items',
+    filter: `user_id=eq.${user?.id}`,
+    onUpdate: (payload) => {
+      console.log('Cart item updated:', payload);
+      fetchCartItems(); // Refresh cart items
+    },
+    onInsert: (payload) => {
+      console.log('Cart item added:', payload);
+      fetchCartItems(); // Refresh cart items
+    },
+    onDelete: (payload) => {
+      console.log('Cart item removed:', payload);
+      fetchCartItems(); // Refresh cart items
+    }
+  });
+
   const categories = ['all', 'breakfast', 'lunch', 'dinner', 'snacks', 'beverages', 'desserts'];
 
   useEffect(() => {
@@ -137,56 +167,23 @@ const StudentDashboard: React.FC = () => {
   };
 
   const addToCart = async (menuItem: MenuItem) => {
-    // Check if item is available
-    if (menuItem.quantity_available <= 0) {
-      showToast('Item is out of stock', 'error');
-      return;
-    }
-
     try {
-      const existingItem = cartItems.find(item => item.menu_item_id === menuItem.id);
+      // Use the database function for atomic cart operations
+      const { data, error } = await supabase.rpc('add_to_cart_with_quantity_check', {
+        p_user_id: user?.id,
+        p_menu_item_id: menuItem.id,
+        p_quantity: 1
+      });
 
-      if (existingItem) {
-        // Update cart quantity and reduce menu item stock
-        const { error: cartError } = await supabase
-          .from('cart_items')
-          .update({ quantity: existingItem.quantity + 1 })
-          .eq('id', existingItem.id);
+      if (error) throw error;
 
-        if (cartError) throw cartError;
-
-        // Immediately reduce the menu item quantity in database
-        const { error: menuError } = await supabase
-          .from('menu_items')
-          .update({ quantity_available: menuItem.quantity_available - 1 })
-          .eq('id', menuItem.id);
-
-        if (menuError) throw menuError;
+      if (data.success) {
+        showToast(data.message, 'success');
+        console.log('Cart operation result:', data);
+        // Real-time subscriptions will handle the UI updates
       } else {
-        // Insert new cart item and reduce menu item stock
-        const { error: insertError } = await supabase
-          .from('cart_items')
-          .insert({
-            user_id: user?.id,
-            menu_item_id: menuItem.id,
-            quantity: 1
-          });
-
-        if (insertError) throw insertError;
-
-        // Immediately reduce the menu item quantity in database
-        const { error: menuError } = await supabase
-          .from('menu_items')
-          .update({ quantity_available: menuItem.quantity_available - 1 })
-          .eq('id', menuItem.id);
-
-        if (menuError) throw menuError;
+        showToast(data.error, 'error');
       }
-
-      // Refresh both cart and menu items to reflect changes
-      await fetchCartItems();
-      await fetchMenuItems();
-      showToast('Item added to cart', 'success');
     } catch (error) {
       console.error('Error adding to cart:', error);
       showToast('Failed to add item to cart', 'error');
@@ -194,59 +191,23 @@ const StudentDashboard: React.FC = () => {
   };
 
   const updateCartQuantity = async (cartItemId: string, newQuantity: number) => {
-    if (newQuantity <= 0) {
-      await removeFromCart(cartItemId);
-      return;
-    }
-
-    const cartItem = cartItems.find(item => item.id === cartItemId);
-    if (!cartItem) {
-      showToast('Cart item not found', 'error');
-      return;
-    }
-
-    // Get current menu item data from database to ensure accuracy
-    const { data: currentMenuItem, error: fetchError } = await supabase
-      .from('menu_items')
-      .select('*')
-      .eq('id', cartItem.menu_item_id)
-      .single();
-
-    if (fetchError || !currentMenuItem) {
-      showToast('Menu item not found', 'error');
-      return;
-    }
-
-    const quantityDifference = newQuantity - cartItem.quantity;
-    
-    // Check if we're trying to add more items than available
-    if (quantityDifference > 0 && quantityDifference > currentMenuItem.quantity_available) {
-      showToast(`Only ${currentMenuItem.quantity_available} more items available`, 'error');
-      return;
-    }
-
     try {
-      // Update cart quantity
-      const { error: cartError } = await supabase
-        .from('cart_items')
-        .update({ quantity: newQuantity })
-        .eq('id', cartItemId);
+      // Use the database function for atomic quantity updates
+      const { data, error } = await supabase.rpc('update_cart_quantity_with_stock_check', {
+        p_user_id: user?.id,
+        p_cart_item_id: cartItemId,
+        p_new_quantity: newQuantity
+      });
 
-      if (cartError) throw cartError;
+      if (error) throw error;
 
-      // Update menu item quantity in database based on the difference
-      const newMenuQuantity = currentMenuItem.quantity_available - quantityDifference;
-      const { error: menuError } = await supabase
-        .from('menu_items')
-        .update({ quantity_available: Math.max(0, newMenuQuantity) })
-        .eq('id', currentMenuItem.id);
-
-      if (menuError) throw menuError;
-
-      // Refresh both cart and menu items to reflect changes
-      await fetchCartItems();
-      await fetchMenuItems();
-      showToast('Cart updated successfully', 'success');
+      if (data.success) {
+        showToast(data.message, 'success');
+        console.log('Cart update result:', data);
+        // Real-time subscriptions will handle the UI updates
+      } else {
+        showToast(data.error, 'error');
+      }
     } catch (error) {
       console.error('Error updating cart quantity:', error);
       showToast('Failed to update quantity', 'error');
@@ -254,47 +215,22 @@ const StudentDashboard: React.FC = () => {
   };
 
   const removeFromCart = async (cartItemId: string) => {
-    const cartItem = cartItems.find(item => item.id === cartItemId);
-    if (!cartItem) {
-      showToast('Cart item not found', 'error');
-      return;
-    }
-
     try {
-      // Get current menu item data from database
-      const { data: currentMenuItem, error: fetchError } = await supabase
-        .from('menu_items')
-        .select('*')
-        .eq('id', cartItem.menu_item_id)
-        .single();
-
-      if (fetchError || !currentMenuItem) {
-        showToast('Menu item not found', 'error');
-        return;
-      }
-
-      // Remove from cart
-      const { error } = await supabase
-        .from('cart_items')
-        .delete()
-        .eq('id', cartItemId);
+      // Use the database function for atomic cart removal
+      const { data, error } = await supabase.rpc('remove_from_cart_with_quantity_restore', {
+        p_user_id: user?.id,
+        p_cart_item_id: cartItemId
+      });
 
       if (error) throw error;
 
-      // Return the quantity back to menu item in database
-      const { error: menuError } = await supabase
-        .from('menu_items')
-        .update({ 
-          quantity_available: currentMenuItem.quantity_available + cartItem.quantity 
-        })
-        .eq('id', cartItem.menu_item_id);
-
-      if (menuError) throw menuError;
-
-      // Refresh both cart and menu items to reflect changes
-      await fetchCartItems();
-      await fetchMenuItems();
-      showToast('Item removed from cart', 'success');
+      if (data.success) {
+        showToast(data.message, 'success');
+        console.log('Cart removal result:', data);
+        // Real-time subscriptions will handle the UI updates
+      } else {
+        showToast(data.error, 'error');
+      }
     } catch (error) {
       console.error('Error removing from cart:', error);
       showToast('Failed to remove item', 'error');
@@ -302,60 +238,24 @@ const StudentDashboard: React.FC = () => {
   };
 
   const placeOrder = async () => {
-    if (cartItems.length === 0) {
-      showToast('Your cart is empty', 'error');
-      return;
-    }
-
     try {
-      // Calculate total amount
-      const totalAmount = cartItems.reduce(
-        (sum, item) => sum + (item.menu_items.price * item.quantity),
-        0
-      );
+      // Use the database function for atomic order placement
+      const { data, error } = await supabase.rpc('place_order_with_cart_clear', {
+        p_user_id: user?.id
+      });
 
-      // Create the order
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          user_id: user?.id,
-          total_amount: totalAmount,
-          status: 'pending',
-          payment_status: 'pending'
-        })
-        .select()
-        .single();
+      if (error) throw error;
 
-      if (orderError) throw orderError;
-
-      // Create order items
-      const orderItems = cartItems.map(item => ({
-        order_id: order.id,
-        menu_item_id: item.menu_item_id,
-        quantity: item.quantity,
-        price: item.menu_items.price
-      }));
-
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems);
-
-      if (itemsError) throw itemsError;
-
-      // Clear cart after successful order placement (quantities already deducted)
-      const { error: clearCartError } = await supabase
-        .from('cart_items')
-        .delete()
-        .eq('user_id', user?.id);
-
-      if (clearCartError) throw clearCartError;
-
-      // Refresh all data to reflect changes
-      await fetchCartItems();
-      await fetchOrders();
-      await fetchMenuItems();
-      setActiveTab('orders');
-      showToast('Order placed successfully!', 'success');
+      if (data.success) {
+        showToast(data.message, 'success');
+        console.log('Order placement result:', data);
+        setActiveTab('orders');
+        // Refresh orders to show the new order
+        await fetchOrders();
+        // Real-time subscriptions will handle cart clearing
+      } else {
+        showToast(data.error, 'error');
+      }
     } catch (error) {
       console.error('Error placing order:', error);
       showToast('Failed to place order', 'error');
@@ -526,6 +426,12 @@ const StudentDashboard: React.FC = () => {
                         <div className="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold">
                           Out of Stock
                         </div>
+                      </div>
+                    )}
+                    {/* Low stock warning */}
+                    {item.quantity_available > 0 && item.quantity_available <= 5 && (
+                      <div className="absolute top-3 left-3 bg-yellow-500 text-white px-2 py-1 rounded-lg text-xs font-semibold">
+                        Only {item.quantity_available} left!
                       </div>
                     )}
                   </div>
