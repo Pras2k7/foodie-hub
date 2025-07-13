@@ -168,6 +168,8 @@ const StudentDashboard: React.FC = () => {
 
   const addToCart = async (menuItem: MenuItem) => {
     try {
+      console.log('Adding to cart:', { userId: user?.id, menuItemId: menuItem.id });
+      
       // Use the database function for atomic cart operations
       const { data, error } = await supabase.rpc('add_to_cart_with_quantity_check', {
         p_user_id: user?.id,
@@ -176,10 +178,13 @@ const StudentDashboard: React.FC = () => {
       });
 
       if (error) throw error;
+      
+      console.log('Cart operation response:', data);
 
       if (data.success) {
         showToast(data.message, 'success');
-        console.log('Cart operation result:', data);
+        // Force refresh cart items to ensure UI updates
+        await fetchCartItems();
         // Real-time subscriptions will handle the UI updates
       } else {
         showToast(data.error, 'error');
@@ -192,6 +197,8 @@ const StudentDashboard: React.FC = () => {
 
   const updateCartQuantity = async (cartItemId: string, newQuantity: number) => {
     try {
+      console.log('Updating cart quantity:', { cartItemId, newQuantity });
+      
       // Use the database function for atomic quantity updates
       const { data, error } = await supabase.rpc('update_cart_quantity_with_stock_check', {
         p_user_id: user?.id,
@@ -200,10 +207,14 @@ const StudentDashboard: React.FC = () => {
       });
 
       if (error) throw error;
+      
+      console.log('Cart update response:', data);
 
       if (data.success) {
         showToast(data.message, 'success');
-        console.log('Cart update result:', data);
+        // Force refresh cart items and menu items
+        await fetchCartItems();
+        await fetchMenuItems();
         // Real-time subscriptions will handle the UI updates
       } else {
         showToast(data.error, 'error');
@@ -216,6 +227,8 @@ const StudentDashboard: React.FC = () => {
 
   const removeFromCart = async (cartItemId: string) => {
     try {
+      console.log('Removing from cart:', { cartItemId });
+      
       // Use the database function for atomic cart removal
       const { data, error } = await supabase.rpc('remove_from_cart_with_quantity_restore', {
         p_user_id: user?.id,
@@ -223,10 +236,14 @@ const StudentDashboard: React.FC = () => {
       });
 
       if (error) throw error;
+      
+      console.log('Cart removal response:', data);
 
       if (data.success) {
         showToast(data.message, 'success');
-        console.log('Cart removal result:', data);
+        // Force refresh cart items and menu items
+        await fetchCartItems();
+        await fetchMenuItems();
         // Real-time subscriptions will handle the UI updates
       } else {
         showToast(data.error, 'error');
@@ -239,19 +256,25 @@ const StudentDashboard: React.FC = () => {
 
   const placeOrder = async () => {
     try {
+      console.log('Placing order for user:', user?.id);
+      
       // Use the database function for atomic order placement
       const { data, error } = await supabase.rpc('place_order_with_cart_clear', {
         p_user_id: user?.id
       });
 
       if (error) throw error;
+      
+      console.log('Order placement response:', data);
 
       if (data.success) {
         showToast(data.message, 'success');
-        console.log('Order placement result:', data);
         setActiveTab('orders');
         // Refresh orders to show the new order
         await fetchOrders();
+        // Force refresh cart items and menu items
+        await fetchCartItems();
+        await fetchMenuItems();
         // Real-time subscriptions will handle cart clearing
       } else {
         showToast(data.error, 'error');
